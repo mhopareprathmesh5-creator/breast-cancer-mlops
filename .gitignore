@@ -24,3 +24,6 @@ reports/
 # Secrets and editor settings
 .env
 .vscode/
+
+# Personal AI-assistant notes
+CLAUDE.md
