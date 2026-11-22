@@ -1,0 +1,26 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+
+# Test cache
+.pytest_cache/
+
+# Data (not stored in Git)
+data/
+
+# MLflow tracking output
+mlruns/
+mlartifacts/
+
+# SQLite databases (prediction log)
+*.db
+
+# Generated reports (Evidently)
+reports/
+
+# Secrets and editor settings
+.env
+.vscode/
