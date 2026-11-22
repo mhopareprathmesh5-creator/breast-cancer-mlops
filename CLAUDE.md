@@ -61,8 +61,9 @@ breast-cancer-mlops/
 
 ## Progress (update as phases complete)
 - [x] Phase 0: Tools verified. Git 2.54, Docker 29.9, Compose v5.6, VS Code 1.146. Python 3.11 installed (old global 3.10.0 is still present; the venv uses 3.11).
-- [ ] Phase 1: **In progress.** Steps: ~~create venv~~ (done: `venv/`, Python 3.11.9) → ~~folders~~ → ~~`.gitignore`~~ → ~~download dataset~~ (4,024 rows + header, 16 cols; note `"T Stage "` has a trailing space) → ~~README~~ → first commit → create GitHub repo → push.
-- [ ] Phase 2 to 9: not started.
+- [x] Phase 1: Repo skeleton done. venv `venv/` (Python 3.11.9); folders with `__init__.py`; `.gitignore`; dataset in `data/raw/` (4,024 rows + header, 16 cols; `"T Stage "` has a trailing space → clean column names in code); README; first commit `a6b9c20` pushed to `origin/main` at https://github.com/mhopareprathmesh5-creator/breast-cancer-mlops.
+- [ ] Phase 2: Next. Work on branch `phase-2-training`. Open question to discuss first: should `Survival Months` be a feature? (data leakage)
+- [ ] Phase 3 to 9: not started.
 
 ## Notes
 - Phase 1 `.gitignore` covers: `__pycache__/`, `*.pyc`, `venv/`, `.pytest_cache/`, `data/`, `mlruns/`, `mlartifacts/`, `*.db`, `reports/`, `.env`, `.vscode/`.
