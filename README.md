@@ -27,6 +27,7 @@ Kaggle and place it in `data/raw/`.
 ```powershell
 py -3.11 -m venv venv
 .\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
 ## Project structure
@@ -38,6 +39,20 @@ monitoring/  Evidently drift reports
 data/raw/    dataset (git-ignored)
 ```
 
+## Train
+```powershell
+python -m src.train
+```
+
+Baseline results (held-out 20% test set, Dead = positive class):
+
+| Model | Recall | Precision | F1 | ROC-AUC |
+|---|---|---|---|---|
+| Logistic Regression | 0.626 | 0.280 | 0.387 | 0.731 |
+| Random Forest | 0.537 | 0.297 | 0.383 | 0.713 |
+| Gradient Boosting | 0.415 | 0.282 | 0.336 | 0.689 |
+
 ## Status
 - [x] Phase 1: Repository setup
-- [ ] Phase 2: Training pipeline
+- [x] Phase 2: Training pipeline
+- [ ] Phase 3: MLflow tracking
