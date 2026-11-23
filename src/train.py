@@ -1,183 +1,159 @@
-"""Train and compare three models on the SEER breast cancer data.
+"""Production training: train the chosen model, track it and register it.
 
-Phase 2: plain training and evaluation. Phase 3 adds MLflow tracking.
+Model SELECTION happens in src/compare_models.py (Logistic Regression won).
+This script trains only Logistic Regression and:
+  1. cross-validates it on the training set (a stable estimate of its scores),
+  2. trains it on the full training set and scores it on the held-out test set,
+  3. logs parameters, metrics and the trained pipeline to MLflow,
+  4. registers the pipeline in the MLflow Model Registry and points the
+     @champion alias at it. The API loads models:/breast-cancer-survival@champion.
 
-Run from the project root with:  python -m src.train
+Run from the project root (with `mlflow server` running in another terminal):
+    python -m src.train
 """
 
 # ---------------------------------------------------------------------------
 # Imports
 # ---------------------------------------------------------------------------
-import pandas as pd  # tables: used here to print the results neatly
+import os  # read the MLflow server address from an environment variable
 
-# ColumnTransformer: applies a different preprocessing step to each group of columns.
-from sklearn.compose import ColumnTransformer
-
-# The two tree-based models we compare against the linear baseline.
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
-
-# The simple baseline model. If fancy models can't beat it, they aren't worth it.
+import mlflow  # experiment tracking + model registry
+import mlflow.sklearn  # save/load scikit-learn models in MLflow's format
+from mlflow import MlflowClient  # lower-level API, used to set the alias
+from mlflow.models import infer_signature  # records the expected input/output
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 
-# Metrics. All of them treat Dead (= 1) as the "positive" class.
-from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+from src.data import load_data
 
-# Splits the data into a training part and a held-out test part.
-from sklearn.model_selection import train_test_split
-
-# Pipeline: chains preprocessing + model into one object.
-from sklearn.pipeline import Pipeline
-
-# Preprocessing tools:
-#   OneHotEncoder  -> unordered categories (Race) become 0/1 columns
-#   OrdinalEncoder -> ordered categories (T1 < T2 < T3 < T4) become 0, 1, 2, 3
-#   StandardScaler -> numbers rescaled to mean 0, std 1
-from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
-
-# Our own module: the feature lists and the cleaned data.
-# Keeping these in one place (src/data.py) means training, the API and the tests
-# all use exactly the same columns and cleaning rules.
-from src.data import NOMINAL_FEATURES, NUMERIC_FEATURES, ORDINAL_FEATURES, load_data
+# Reuse the exact preprocessing, evaluation and settings from the comparison,
+# so the production model is built the same way as the one that won.
+from src.compare_models import RANDOM_STATE, TEST_SIZE, build_pipeline, evaluate
 
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-# Fixed random seed: the split and the models come out identical on every run,
-# so results can be reproduced and compared fairly.
-RANDOM_STATE = 42
+CV_FOLDS = 5  # number of cross-validation folds
 
-# 20% of patients are held back for testing; the model never sees them in training.
-TEST_SIZE = 0.2
+# Where the MLflow server is. Read from an environment variable so the same
+# code works locally, in Docker and in Jenkins (each sets its own URL); falls
+# back to the local server started with `mlflow server`.
+TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+
+EXPERIMENT_NAME = "breast-cancer-survival"  # groups the runs in the MLflow UI
+REGISTERED_MODEL_NAME = "breast-cancer-survival"  # name in the Model Registry
+CHAMPION_ALIAS = "champion"  # the alias the API loads
+
+# Metrics computed in cross-validation (scikit-learn's built-in scorer names).
+# All treat Dead (= 1) as the positive class.
+SCORING = {"recall": "recall", "precision": "precision", "f1": "f1", "roc_auc": "roc_auc"}
 
 
-def build_preprocessor() -> ColumnTransformer:
-    """Apply the right transformation to each group of columns."""
-    return ColumnTransformer(
-        transformers=[
-            # (name, transformer, columns)
+def build_model() -> LogisticRegression:
+    """The production model: same settings as in src/compare_models.py.
 
-            # Numeric columns: rescale so large numbers (Tumor Size up to 140)
-            # don't dominate small ones (nodes positive). Logistic Regression
-            # needs this; tree models ignore scale, so it doesn't hurt them.
-            ("num", StandardScaler(), NUMERIC_FEATURES),
-
-            # Ordered categories: we pass the order explicitly
-            # (e.g. ["T1", "T2", "T3", "T4"] -> 0, 1, 2, 3) so the numbers follow
-            # the medical severity. Without it, sklearn would sort alphabetically.
-            (
-                "ord",
-                OrdinalEncoder(categories=list(ORDINAL_FEATURES.values())),
-                list(ORDINAL_FEATURES),
-            ),
-
-            # Unordered categories: one 0/1 column per value (Race_Black,
-            # Race_White, ...), so no fake order like Black < Other < White.
-            # handle_unknown="ignore": an unseen value in the API becomes all
-            # zeros instead of crashing the prediction.
-            ("nom", OneHotEncoder(handle_unknown="ignore"), NOMINAL_FEATURES),
-        ]
+    class_weight="balanced" makes mistakes on the rare Dead class (15%) count
+    more, so the model doesn't just predict "Alive" for everyone.
+    """
+    return LogisticRegression(
+        max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE
     )
 
 
-def get_models() -> dict:
-    """The three candidate models, keyed by name.
+def cross_validate_pipeline(pipeline, X, y) -> dict:
+    """5-fold cross-validation on the training set.
 
-    class_weight="balanced" makes a mistake on the rare Dead class (15%) count
-    about 5.5x more than a mistake on Alive. Without it, a model can get 85%
-    accuracy by predicting "Alive" for everyone, which means 0% recall on Dead.
+    The training set is cut into 5 parts; the pipeline is trained on 4 and
+    scored on the 5th, five times, so every patient is scored once. The mean
+    is more reliable than one test split (only ~123 Dead patients); the std
+    shows how much the score moves between folds.
+    StratifiedKFold keeps the 15% Dead rate in every fold; shuffle + seed make
+    the folds random but repeatable.
     """
-    return {
-        # Baseline: simple, fast, explainable (each feature gets a weight).
-        # max_iter=1000: gives the solver enough steps to converge.
-        "logistic_regression": LogisticRegression(
-            max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE
-        ),
+    cv = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+    scores = cross_validate(pipeline, X, y, cv=cv, scoring=SCORING)
 
-        # Many decision trees, each trained on a random sample; they vote.
-        "random_forest": RandomForestClassifier(
-            n_estimators=300,      # number of trees: more = more stable, slower
-            min_samples_leaf=5,    # each leaf needs >= 5 patients: limits overfitting
-            class_weight="balanced",
-            random_state=RANDOM_STATE,
-            n_jobs=-1,             # use all CPU cores
-        ),
-
-        # Gradient boosting: trees built one after another, each fixing the
-        # previous ones' errors. The "Hist" version is sklearn's fast
-        # implementation and, unlike GradientBoostingClassifier, accepts class_weight.
-        "gradient_boosting": HistGradientBoostingClassifier(
-            class_weight="balanced", random_state=RANDOM_STATE
-        ),
-    }
-
-
-def build_pipeline(model) -> Pipeline:
-    """Preprocessing + model as one object.
-
-    Why a Pipeline:
-    1. No leakage: the scaler and encoders learn their settings (means,
-       categories) inside fit(), from the training data only.
-    2. No training/serving skew: the saved model includes its preprocessing,
-       so the API passes raw values and they're transformed exactly as in training.
-    """
-    return Pipeline(steps=[("preprocess", build_preprocessor()), ("model", model)])
-
-
-def evaluate(pipeline: Pipeline, X_test: pd.DataFrame, y_test: pd.Series) -> dict:
-    """Score a trained pipeline on the held-out test set."""
-    # Hard predictions: 0 (Alive) or 1 (Dead), using the default 0.5 cut-off.
-    y_pred = pipeline.predict(X_test)
-
-    # Probability of Dead for each patient. predict_proba returns two columns
-    # [P(Alive), P(Dead)]; [:, 1] takes the Dead column.
-    y_proba = pipeline.predict_proba(X_test)[:, 1]
-
-    return {
-        # Of all patients who actually died, how many did we flag?
-        # Our main metric: a missed high-risk patient is the costliest error.
-        "recall": recall_score(y_test, y_pred),
-
-        # Of all patients we flagged as Dead, how many actually died?
-        # Low precision = many false alarms. Guards against "flag everyone".
-        "precision": precision_score(y_test, y_pred),
-
-        # Harmonic mean of precision and recall: one number balancing both.
-        "f1": f1_score(y_test, y_pred),
-
-        # How well the model ranks patients by risk, ignoring the cut-off.
-        # 0.5 = random guessing, 1.0 = perfect ranking. Uses probabilities.
-        "roc_auc": roc_auc_score(y_test, y_proba),
-    }
+    # scores["test_recall"] holds 5 numbers (one per fold) -> keep mean and std.
+    metrics = {}
+    for metric in SCORING:
+        metrics[f"cv_{metric}_mean"] = scores[f"test_{metric}"].mean()
+        metrics[f"cv_{metric}_std"] = scores[f"test_{metric}"].std()
+    return metrics
 
 
 def main() -> None:
-    # 1. Load the cleaned data: X = 13 features, y = 1 (Dead) / 0 (Alive).
-    X, y = load_data()
+    # Connect to the MLflow server and choose (or create) the experiment.
+    mlflow.set_tracking_uri(TRACKING_URI)
+    mlflow.set_experiment(EXPERIMENT_NAME)
 
-    # 2. Split into train (80%) and test (20%).
-    #    stratify=y keeps the 15.3% Dead rate the same in both parts; without it,
-    #    a random split could leave too few Dead patients in the test set.
+    # Same cleaned data and the same stratified 80/20 split as the comparison.
+    X, y = load_data()
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=TEST_SIZE, stratify=y, random_state=RANDOM_STATE
     )
-    print(f"Train: {X_train.shape}, Test: {X_test.shape}, "
-          f"Dead rate train/test: {y_train.mean():.3f}/{y_test.mean():.3f}")
 
-    # 3. Train and score each model. Each gets a fresh pipeline, so they
-    #    never share fitted preprocessing.
-    results = {}
-    for name, model in get_models().items():
+    model = build_model()
+
+    # Everything inside this block is recorded as one MLflow "run".
+    with mlflow.start_run(run_name="logistic_regression"):
         pipeline = build_pipeline(model)
-        pipeline.fit(X_train, y_train)           # learns ONLY from training data
-        results[name] = evaluate(pipeline, X_test, y_test)  # scored on unseen data
 
-    # 4. Show a comparison table: one row per model, best recall first.
-    #    .T flips the table so models are rows and metrics are columns.
-    table = pd.DataFrame(results).T.round(3).sort_values("recall", ascending=False)
-    print(table)
+        # 1. Cross-validate on the training set.
+        cv_metrics = cross_validate_pipeline(pipeline, X_train, y_train)
+
+        # 2. Train on the whole training set, score once on the test set.
+        pipeline.fit(X_train, y_train)
+        test_metrics = {
+            f"test_{k}": v for k, v in evaluate(pipeline, X_test, y_test).items()
+        }
+
+        # 3a. Parameters: the settings that produced this run.
+        mlflow.log_params(
+            {
+                "model_type": "logistic_regression",
+                "test_size": TEST_SIZE,
+                "cv_folds": CV_FOLDS,
+                "random_state": RANDOM_STATE,
+                "n_train_rows": len(X_train),
+                "n_test_rows": len(X_test),
+            }
+        )
+        # Every hyperparameter of the model, prefixed so they're easy to find.
+        mlflow.log_params({f"model__{k}": v for k, v in model.get_params().items()})
+
+        # 3b. Metrics: the scores this run achieved.
+        mlflow.log_metrics({**cv_metrics, **test_metrics})
+
+        # 3c + 4. Save the trained pipeline (preprocessing + model) and register it.
+        # signature: expected input columns/types and output type; MLflow
+        #   checks incoming data against it when the model is used.
+        # input_example: 3 real rows, shown in the UI as a usage example.
+        # registered_model_name: also registers it, creating a new version
+        #   (v1, v2, ...) of "breast-cancer-survival" on every run.
+        # MLflow 3 saves it with skops (a safe format, not pickle); Logistic
+        # Regression needs no extra trusted types. Tree models would need
+        # skops_trusted_types=[...] here.
+        model_info = mlflow.sklearn.log_model(
+            pipeline,
+            name="model",
+            signature=infer_signature(X_train, pipeline.predict(X_train)),
+            input_example=X_train.head(3),
+            registered_model_name=REGISTERED_MODEL_NAME,
+        )
+
+    # Print the scores.
+    for name, value in {**cv_metrics, **test_metrics}.items():
+        print(f"{name:20s} {value:.3f}")
+
+    # Point the "champion" alias at the new version. The API loads
+    # models:/breast-cancer-survival@champion, so moving the alias deploys a
+    # model, and moving it back rolls back, with no code changes.
+    version = model_info.registered_model_version
+    MlflowClient().set_registered_model_alias(
+        REGISTERED_MODEL_NAME, CHAMPION_ALIAS, version
+    )
+    print(f"\nRegistered {REGISTERED_MODEL_NAME} v{version} @{CHAMPION_ALIAS}")
 
 
-# Runs only when this file is executed directly (python -m src.train),
-# not when another file imports it (e.g. tests importing build_pipeline).
 if __name__ == "__main__":
     main()
