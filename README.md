@@ -34,7 +34,7 @@ python -m pip install -r requirements.txt
 ```
 src/         data cleaning, model comparison, training (MLflow)
 api/         FastAPI service (schemas, prediction log, endpoints)
-tests/       pytest tests
+tests/       pytest tests (data, model quality gate, API)
 monitoring/  Evidently drift reports
 data/raw/    dataset (git-ignored)
 ```
@@ -97,9 +97,27 @@ Inputs are validated (allowed categories, value ranges, positive nodes ≤ exami
 nodes); invalid requests get HTTP `422` and never reach the model. Every valid
 prediction is logged to `predictions.db` (SQLite, git-ignored) for drift monitoring.
 
+## Tests
+Run from the project root (needs `data/raw/Breast_Cancer.csv`; MLflow does not need to be running):
+```powershell
+python -m pytest
+```
+
+41 tests in three files:
+
+| File | Checks |
+|---|---|
+| `tests/test_data.py` | Cleaning rules, the 13 features, no leakage columns, target balance |
+| `tests/test_model.py` | **Quality gate** (recall ≥ 0.55, ROC-AUC ≥ 0.70), reproducibility, sensible risk ordering |
+| `tests/test_api.py` | `/health` and `/predict` (200 / 422 / 503), prediction logging, API matches the model, schema matches the training data |
+
+API tests replace MLflow and the database with test doubles, so they run offline
+and never touch the real `predictions.db`.
+
 ## Status
 - [x] Phase 1: Repository setup
 - [x] Phase 2: Training pipeline
 - [x] Phase 3: MLflow tracking
 - [x] Phase 4: FastAPI service
-- [ ] Phase 5: Automated tests (pytest)
+- [x] Phase 5: Automated tests (pytest)
+- [ ] Phase 6: Docker and docker-compose
