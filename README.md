@@ -33,7 +33,7 @@ python -m pip install -r requirements.txt
 ## Project structure
 ```
 src/         data cleaning, model comparison, training (MLflow)
-api/         FastAPI service
+api/         FastAPI service (schemas, prediction log, endpoints)
 tests/       pytest tests
 monitoring/  Evidently drift reports
 data/raw/    dataset (git-ignored)
@@ -64,8 +64,42 @@ Dead = positive class). Logistic Regression won and is the production model:
 5-fold cross-validated recall confirms it: LR 0.631 ± 0.030 (RF 0.517, GB 0.391).
 Rerun the comparison when the data changes or drift is detected.
 
+## Run the API
+With `mlflow server` running (the API loads `breast-cancer-survival@champion` from it at startup):
+```powershell
+python -m uvicorn api.main:app --reload
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | Readiness: `200` when the model is loaded, `503` otherwise |
+| `POST /predict` | Risk prediction for one patient |
+| `GET /docs` | Interactive Swagger UI: http://127.0.0.1:8000/docs |
+
+Example request to `/predict`:
+```json
+{
+  "age": 68, "race": "White", "marital_status": "Married",
+  "t_stage": "T1", "n_stage": "N1", "sixth_stage": "IIA",
+  "differentiate": "Poorly differentiated", "a_stage": "Regional",
+  "tumor_size": 4, "estrogen_status": "Positive",
+  "progesterone_status": "Positive",
+  "regional_node_examined": 24, "regional_node_positive": 1
+}
+```
+
+Response:
+```json
+{"prediction": "Alive", "probability_dead": 0.3284, "model_version": "1"}
+```
+
+Inputs are validated (allowed categories, value ranges, positive nodes ≤ examined
+nodes); invalid requests get HTTP `422` and never reach the model. Every valid
+prediction is logged to `predictions.db` (SQLite, git-ignored) for drift monitoring.
+
 ## Status
 - [x] Phase 1: Repository setup
 - [x] Phase 2: Training pipeline
 - [x] Phase 3: MLflow tracking
-- [ ] Phase 4: FastAPI service
+- [x] Phase 4: FastAPI service
+- [ ] Phase 5: Automated tests (pytest)
