@@ -56,7 +56,7 @@ opentelemetry-proto==1.45.2
 opentelemetry-sdk==1.45.2
 opentelemetry-semantic-conventions==0.66b2
 packaging==26.3
-pandas==3.1.1
+pandas==2.3.3
 pillow==13.0.0
 pluggy==1.7.0
 prettytable==3.19.0
@@ -74,7 +74,6 @@ pytest==9.2.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.4
 python-multipart==0.0.34
-pywin32==312 ; sys_platform == "win32"
 PyYAML==6.0.4
 requests==2.34.2
 scikit-learn==1.9.1
@@ -92,8 +91,8 @@ typing_extensions==4.16.0
 tzdata==2026.6
 urllib3==2.8.0
 uvicorn==0.54.0
-waitress==3.0.2 ; sys_platform == "win32"
 wcwidth==0.9.5
 Werkzeug==3.1.9
 yarl==1.25.1
 zipp==4.1.2
+evidently==0.7.23

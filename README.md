@@ -35,7 +35,7 @@ python -m pip install -r requirements.txt
 src/         data cleaning, model comparison, training (MLflow)
 api/         FastAPI service (schemas, prediction log, endpoints)
 tests/       pytest tests (data, model quality gate, API)
-monitoring/  Evidently drift reports
+monitoring/  drift_report.py (Evidently drift report on the prediction log)
 data/raw/    dataset (git-ignored)
 scripts/     smoke_check.py (post-deployment check)
 Dockerfile, docker-compose.yml   container image and the 3-service stack
@@ -120,9 +120,28 @@ non-root user). The dataset is mounted read-only into `train`, never copied into
 Stop with `Ctrl+C`, then `docker compose down` (volumes are kept; add `-v` to delete them).
 Note: each `up` retrains and registers a new model version.
 
-`requirements.txt` marks the Windows-only packages `pywin32` and `waitress` with
-`; sys_platform == "win32"` so the Linux image builds. Re-add these markers if you
-regenerate the file with `pip freeze`.
+`requirements.txt` does not list the Windows-only packages `pywin32` and `waitress`:
+pip installs them automatically on Windows (MLflow needs them there) and skips them in
+the Linux image. If you regenerate the file with `pip freeze`, delete those two lines.
+
+## Drift monitoring (Evidently)
+Compares what the API has received (the prediction log) with the data the model
+was trained on, column by column, and writes an HTML report:
+```powershell
+docker compose run --rm monitor
+```
+- **Reference:** the 80% training split (3,218 patients).
+- **Current:** every logged `/predict` request, excluding the smoke-test patient
+  that each deployment sends.
+- **Output:** `reports/drift_report.html` (open in a browser) and a summary such as
+  `Drifted columns: {'count': ..., 'share': ...}`. Fewer than 30 logged rows gives a
+  warning, because the result isn't statistically reliable yet.
+- The `monitor` service runs in Docker because the prediction log lives in the
+  `api-logs` volume (mounted read-only). It uses a compose profile, so
+  `docker compose up` doesn't start it.
+
+Evidently 0.7.23 requires pandas 2.x (it uses an internal pandas function removed
+in pandas 3), so pandas is pinned to 2.3.3.
 
 ## CI/CD with Jenkins
 The `Jenkinsfile` defines the pipeline as code. A Jenkins Pipeline job reads it
@@ -175,4 +194,5 @@ and never touch the real `predictions.db`.
 - [x] Phase 5: Automated tests (pytest)
 - [x] Phase 6: Docker and docker-compose
 - [x] Phase 7: Jenkins CI/CD
-- [ ] Phase 8: Drift monitoring (Evidently)
+- [x] Phase 8: Drift monitoring (Evidently)
+- [ ] Phase 9: Final documentation

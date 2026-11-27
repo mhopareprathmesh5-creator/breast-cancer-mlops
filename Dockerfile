@@ -27,12 +27,15 @@ RUN pip install -r requirements.txt
 # Copy only the code the app needs (the rest is excluded by .dockerignore).
 COPY src/ src/
 COPY api/ api/
+COPY monitoring/ monitoring/
+COPY scripts/ scripts/
 
-# Security: don't run as root. Create a normal user and give it the two
-# folders it must write to: /app/logs (prediction log) and /mlflow (MLflow data).
+# Security: don't run as root. Create a normal user and give it the folders
+# it must write to: /app/logs (prediction log), /app/reports (drift reports)
+# and /mlflow (MLflow data).
 RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /app/logs /mlflow \
-    && chown appuser:appuser /app/logs /mlflow
+    && mkdir -p /app/logs /app/reports /mlflow \
+    && chown appuser:appuser /app/logs /app/reports /mlflow
 USER appuser
 
 # Documents that the API listens on port 8000 (the port is opened by `-p`).
