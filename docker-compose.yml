@@ -1,5 +1,6 @@
-# The whole system: MLflow server -> one-off training -> API.
+# The whole system: MLflow server -> one-off training -> API (+ on-demand monitor).
 # Start everything:  docker compose up --build
+# Drift report:      docker compose run --rm monitor
 # All three services use the same image (built from the Dockerfile), each
 # with a different command, so client and server always run the same code
 # and the same MLflow version.
@@ -57,6 +58,20 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # 4. Drift report on the prediction log (run on demand, not with `up`):
+  #    docker compose run --rm monitor
+  monitor:
+    image: breast-cancer-mlops
+    command: python -m monitoring.drift_report
+    profiles: ["monitoring"]      # not started by `docker compose up`; run explicitly
+    environment:
+      PREDICTIONS_DB_URL: sqlite:////app/logs/predictions.db
+      DO_NOT_TRACK: "1"           # turn off Evidently's anonymous usage telemetry
+    volumes:
+      - api-logs:/app/logs:ro     # the API's prediction log, read-only
+      - ./data:/app/data:ro       # training data (the reference)
+      - ./reports:/app/reports    # the HTML report lands in your reports/ folder
 
 # Named volumes: storage managed by Docker that survives container restarts.
 volumes:
