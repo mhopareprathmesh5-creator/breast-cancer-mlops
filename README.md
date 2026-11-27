@@ -37,7 +37,9 @@ api/         FastAPI service (schemas, prediction log, endpoints)
 tests/       pytest tests (data, model quality gate, API)
 monitoring/  Evidently drift reports
 data/raw/    dataset (git-ignored)
+scripts/     smoke_check.py (post-deployment check)
 Dockerfile, docker-compose.yml   container image and the 3-service stack
+Jenkinsfile  CI/CD pipeline
 ```
 
 ## Train
@@ -122,6 +124,32 @@ Note: each `up` retrains and registers a new model version.
 `; sys_platform == "win32"` so the Linux image builds. Re-add these markers if you
 regenerate the file with `pip freeze`.
 
+## CI/CD with Jenkins
+The `Jenkinsfile` defines the pipeline as code. A Jenkins Pipeline job reads it
+from GitHub (`*/main`) and runs it on every new commit.
+
+| Stage | What happens |
+|---|---|
+| Checkout | Get the commit that triggered the build |
+| Prepare data | Copy `Breast_Cancer.csv` into the workspace (the dataset is not in Git) |
+| Build image | `docker build` → `breast-cancer-mlops:<build number>` and `:latest` |
+| Test | `pytest` **inside the built image** (includes the recall/ROC-AUC quality gate); results published as a JUnit report |
+| Start MLflow | `docker compose up -d --wait mlflow` |
+| Train | `docker compose run --rm train` → registers a new version as `@champion` |
+| Deploy API | Recreate the `api` container so it loads the new champion |
+| Smoke test | `scripts/smoke_check.py` calls `/health` and `/predict` on the deployed API |
+
+Any failing stage stops the pipeline, so a broken change or a worse model never
+reaches the deployed API; on failure the container logs are printed.
+
+- **Trigger:** `pollSCM` checks GitHub every ~5 minutes (a webhook would need Jenkins
+  to be reachable from the internet).
+- **Setup used here:** Jenkins as a Windows service (steps use `bat`), Docker Desktop
+  running, dataset at `D:\breast-cancer-mlops\data\raw\`. Job type: *Pipeline*,
+  definition *Pipeline script from SCM*, script path `Jenkinsfile`.
+- `COMPOSE_PROJECT_NAME=breast-cancer-mlops` makes Jenkins manage the same containers
+  and volumes as `docker compose up` in the project folder.
+
 ## Tests
 Run from the project root (needs `data/raw/Breast_Cancer.csv`; MLflow does not need to be running):
 ```powershell
@@ -146,4 +174,5 @@ and never touch the real `predictions.db`.
 - [x] Phase 4: FastAPI service
 - [x] Phase 5: Automated tests (pytest)
 - [x] Phase 6: Docker and docker-compose
-- [ ] Phase 7: Jenkins CI/CD
+- [x] Phase 7: Jenkins CI/CD
+- [ ] Phase 8: Drift monitoring (Evidently)
