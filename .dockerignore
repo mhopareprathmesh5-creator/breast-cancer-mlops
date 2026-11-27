@@ -1,0 +1,15 @@
+# Files Docker must NOT send into the build (like .gitignore, but for images).
+venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.git/
+.vscode/
+data/
+mlruns/
+mlartifacts/
+*.db
+reports/
+.env
+tests/
+CLAUDE.md

@@ -1,0 +1,64 @@
+# The whole system: MLflow server -> one-off training -> API.
+# Start everything:  docker compose up --build
+# All three services use the same image (built from the Dockerfile), each
+# with a different command, so client and server always run the same code
+# and the same MLflow version.
+
+services:
+  # 1. MLflow tracking server + model registry
+  mlflow:
+    build: .                    # build the image from ./Dockerfile ...
+    image: breast-cancer-mlops  # ... and name it (the other services reuse it)
+    command: >
+      mlflow server
+      --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --artifacts-destination /mlflow/mlartifacts
+      --allowed-hosts mlflow:5000,localhost:*,127.0.0.1:*
+    ports:
+      - "5000:5000"             # host port : container port -> UI at http://localhost:5000
+    volumes:
+      - mlflow-data:/mlflow     # keep runs and models when the container is removed
+    healthcheck:                # "healthy" = /health answers (slim image has no curl, so use Python)
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # 2. Train the model once and register it as @champion, then exit
+  train:
+    image: breast-cancer-mlops
+    command: python -m src.train
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000   # "mlflow" = the service name above
+    volumes:
+      - ./data:/app/data:ro     # the dataset, mounted read-only (it is NOT in the image)
+    depends_on:
+      mlflow:
+        condition: service_healthy              # wait until MLflow answers
+
+  # 3. The API (the image's default command: uvicorn)
+  api:
+    image: breast-cancer-mlops
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PREDICTIONS_DB_URL: sqlite:////app/logs/predictions.db
+    ports:
+      - "8000:8000"             # API at http://localhost:8000
+    volumes:
+      - api-logs:/app/logs      # keep the prediction log (for Evidently, Phase 8)
+    depends_on:
+      train:
+        condition: service_completed_successfully  # start only after training succeeded
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+# Named volumes: storage managed by Docker that survives container restarts.
+volumes:
+  mlflow-data:
+  api-logs:

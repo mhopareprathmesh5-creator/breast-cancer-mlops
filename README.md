@@ -37,6 +37,7 @@ api/         FastAPI service (schemas, prediction log, endpoints)
 tests/       pytest tests (data, model quality gate, API)
 monitoring/  Evidently drift reports
 data/raw/    dataset (git-ignored)
+Dockerfile, docker-compose.yml   container image and the 3-service stack
 ```
 
 ## Train
@@ -97,6 +98,30 @@ Inputs are validated (allowed categories, value ranges, positive nodes ≤ exami
 nodes); invalid requests get HTTP `422` and never reach the model. Every valid
 prediction is logged to `predictions.db` (SQLite, git-ignored) for drift monitoring.
 
+## Run with Docker
+The whole system (MLflow server, training, API) starts with one command. Requires
+Docker Desktop and `data/raw/Breast_Cancer.csv`; stop any local `mlflow server` or
+`uvicorn` first, because the containers use ports 5000 and 8000.
+```powershell
+docker compose up --build
+```
+
+| Service | What it does |
+|---|---|
+| `mlflow` | Tracking server + model registry at http://localhost:5000 (data kept in the `mlflow-data` volume) |
+| `train` | Starts when MLflow is healthy, trains the model, registers `breast-cancer-survival@champion`, then exits |
+| `api` | Starts after training succeeds; API at http://localhost:8000 (`/docs`, `/health`, `/predict`); prediction log kept in the `api-logs` volume |
+
+All three services use one image built from the `Dockerfile` (Python 3.11-slim,
+non-root user). The dataset is mounted read-only into `train`, never copied into the image.
+
+Stop with `Ctrl+C`, then `docker compose down` (volumes are kept; add `-v` to delete them).
+Note: each `up` retrains and registers a new model version.
+
+`requirements.txt` marks the Windows-only packages `pywin32` and `waitress` with
+`; sys_platform == "win32"` so the Linux image builds. Re-add these markers if you
+regenerate the file with `pip freeze`.
+
 ## Tests
 Run from the project root (needs `data/raw/Breast_Cancer.csv`; MLflow does not need to be running):
 ```powershell
@@ -120,4 +145,5 @@ and never touch the real `predictions.db`.
 - [x] Phase 3: MLflow tracking
 - [x] Phase 4: FastAPI service
 - [x] Phase 5: Automated tests (pytest)
-- [ ] Phase 6: Docker and docker-compose
+- [x] Phase 6: Docker and docker-compose
+- [ ] Phase 7: Jenkins CI/CD
